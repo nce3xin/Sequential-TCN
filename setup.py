@@ -6,7 +6,6 @@ import torch.nn as nn
 import torch
 import numpy as np
 import torch.nn.functional as F
-from torch.autograd import Variable
 
 def parse_args():
     # run with cuda: python setup.py --cuda
