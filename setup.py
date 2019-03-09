@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch
 import numpy as np
 import torch.nn.functional as F
+from tensorboardX import SummaryWriter
 
 def parse_args():
     # run with cuda: python setup.py --cuda
@@ -13,8 +14,13 @@ def parse_args():
     # run with permuted MNIST: python setup.py --permuted
     # run without permuted MNIST: python setup.py
     parser=argparse.ArgumentParser(description='Sequential TCN')
-    parser.add_argument('-b','--batch_size',type=int,default=64,help='batch size')
-    parser.add_argument('-c','--cuda',action='store_true',help='use cuda or not')
+    
+    # positional argument (required)
+    parser.add_argument('tbx_log_dir',type=str,help="tensorboardX log directory. Example: runs/exp-1/. When a new experiment, change exp-1 to exp-2 or whatever.")
+    
+    # optional argument
+    parser.add_argument('-b','--batch_size',type=int,default=128,help='batch size')
+    parser.add_argument('-c','--cuda',action='store_true',help='enable cuda')
     parser.add_argument('-d','--dropout',type=float,default=0.05,help='dropout value')
     parser.add_argument('-g','--gradient_clip',type=float,default=-1,help='gradient clipping (default: -1), -1 means no clipping')
     parser.add_argument('-e','--epoch',type=int,default=20,help='epochs')
@@ -24,8 +30,9 @@ def parse_args():
     parser.add_argument('-i','--initial_lr',type=float,default=2e-3,help='initial learning rate')
     parser.add_argument('-o','--optimizer',type=str,default='Adam',help='optimizer')
     parser.add_argument('-n','--n_hidden',type=int,default=25,help='# of hidden units per layer')
-    parser.add_argument('-r','--seed',type=int,default=1111,help='random seed')
-    parser.add_argument('-p','--permute',action='store_true',help='permuted or not')
+    parser.add_argument('-s','--seed',type=int,default=1111,help='random seed')
+    parser.add_argument('-p','--permute',action='store_true',help='enable permuted')
+    parser.add_argument('-v','--visual_interval',type=int,default=20,help='visualization interval, the number of batches between two visualization')
     args=parser.parse_args()
     return args
 
@@ -51,9 +58,11 @@ def get_criterion():
     criterion=nn.NLLLoss()
     return criterion
 
-def train(args,model,train_loader,optimizer,criterion,in_channels,sequence_length,current_epoch):
+def train(args,model,train_loader,optimizer,criterion,
+            in_channels,sequence_length,current_epoch,writer):
     model.train()
     train_loss=0
+
     for batch_idx,data in enumerate(train_loader):
         inputs,targets=data
         if args.cuda:
@@ -69,6 +78,12 @@ def train(args,model,train_loader,optimizer,criterion,in_channels,sequence_lengt
             torch.nn.utils.clip_grad_norm_(m.parameters(),args.gradient_clip)
         optimizer.step()
         train_loss+=loss
+
+        # Draw a dot for every visual_interval batches for the training loss curve
+        if batch_idx % args.visual_interval == 0:
+            niter=(current_epoch-1) * len(train_loader)+batch_idx
+            writer.add_scalar('train loss',loss,niter)
+
         if batch_idx > 0 and batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{}\t({:.0f}%)]\tLoss: {:.6f}'
                 .format(current_epoch,batch_idx*args.batch_size,len(train_loader.dataset),
@@ -83,7 +98,7 @@ def train(args,model,train_loader,optimizer,criterion,in_channels,sequence_lengt
             '''
             train_loss=0
 
-def test(model,test_loader):
+def test(model,test_loader,writer,ep):
     model.eval()
     correct=0
     test_loss=0
@@ -102,6 +117,10 @@ def test(model,test_loader):
     
     test_loss/=len(test_loader.dataset)
     accuracy=correct/len(test_loader.dataset)
+
+    # accuracy curve
+    writer.add_scalar('test accuracy',accuracy,ep)
+
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.4f}%)\n'
                     .format(test_loss,correct,len(test_loader.dataset),
                     100*accuracy))
@@ -154,9 +173,13 @@ if __name__=='__main__':
     optimizer=get_optimizer(args.optimizer,lr,m)
     criterion=get_criterion()
 
+    # visualization
+    writer=SummaryWriter(args.tbx_log_dir)
+
     for ep in range(1,args.epoch+1):
-        train(args,m,train_loader,optimizer,criterion,in_channels,sequence_length,ep)
-        test(m,test_loader)
+        train(args,m,train_loader,optimizer,criterion,
+                    in_channels,sequence_length,ep,writer)
+        test(m,test_loader,writer,ep)
         # learning rate annealing
         if ep%10==0:
             lr/=10
